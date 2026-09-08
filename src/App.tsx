@@ -13,27 +13,29 @@ type Workout =
 
 interface Profile {
   name: string;
-  age: number;
+  age: number | "";
   sex: "female" | "male";
-  heightCm: number;
-  weightKg: number;
+  heightCm: number | "";
+  weightKg: number | "";
   goal: Goal;
   workout: Workout;
 }
 
+const STORAGE_KEY = "dailyFuelProfileV2";
+
 const defaultProfile: Profile = {
   name: "",
-  age: 44,
+  age: "",
   sex: "female",
-  heightCm: 163,
-  weightKg: 55,
+  heightCm: "",
+  weightKg: "",
   goal: "recomposition",
   workout: "strength",
 };
 
 function App() {
   const [profile, setProfile] = useState<Profile>(() => {
-    const saved = localStorage.getItem("dailyFuelProfile");
+    const saved = localStorage.getItem(STORAGE_KEY);
     return saved ? JSON.parse(saved) : defaultProfile;
   });
 
@@ -45,7 +47,7 @@ function App() {
   } | null>(null);
 
   useEffect(() => {
-    localStorage.setItem("dailyFuelProfile", JSON.stringify(profile));
+localStorage.setItem(STORAGE_KEY, JSON.stringify(profile));
   }, [profile]);
 
   function updateProfile<K extends keyof Profile>(
@@ -60,7 +62,10 @@ function App() {
 
   function calculatePlan() {
     const { age, sex, heightCm, weightKg, goal, workout } = profile;
-
+    if (age === "" || heightCm === "" || weightKg === "") {
+  alert("Please enter your age, height and weight.");
+  return;
+}
     if (
       age < 18 ||
       age > 100 ||
@@ -128,7 +133,7 @@ function App() {
   }
 
   function clearProfile() {
-    localStorage.removeItem("dailyFuelProfile");
+    localStorage.removeItem(STORAGE_KEY);
     setProfile(defaultProfile);
     setResults(null);
   }
@@ -163,8 +168,15 @@ function App() {
             <input
               type="number"
               value={profile.age}
-              onChange={(event) =>
-                updateProfile("age", Number(event.target.value))
+                placeholder="e.g. 44"
+                min="18"
+                max="100"
+                inputMode="numeric"
+                onChange={(event) =>
+                  updateProfile(
+                "age",
+                event.target.value === "" ? "" : Number(event.target.value)
+                )
               }
             />
           </label>
@@ -188,24 +200,38 @@ function App() {
           <label>
             Height in cm
             <input
-              type="number"
-              value={profile.heightCm}
-              onChange={(event) =>
-                updateProfile("heightCm", Number(event.target.value))
-              }
-            />
+  type="number"
+  value={profile.heightCm}
+  placeholder="e.g. 163"
+  min="120"
+  max="230"
+  inputMode="decimal"
+  onChange={(event) =>
+    updateProfile(
+      "heightCm",
+      event.target.value === "" ? "" : Number(event.target.value)
+    )
+  }
+/>
           </label>
 
           <label>
             Weight in kg
             <input
-              type="number"
-              value={profile.weightKg}
-              step="0.1"
-              onChange={(event) =>
-                updateProfile("weightKg", Number(event.target.value))
-              }
-            />
+  type="number"
+  value={profile.weightKg}
+  placeholder="e.g. 55"
+  min="35"
+  max="250"
+  step="0.1"
+  inputMode="decimal"
+  onChange={(event) =>
+    updateProfile(
+      "weightKg",
+      event.target.value === "" ? "" : Number(event.target.value)
+    )
+  }
+/>
           </label>
 
           <label>
