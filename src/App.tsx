@@ -6,11 +6,11 @@ type Goal = "fat-loss" | "recomposition" | "maintain" | "muscle-gain";
 type Workout = "rest" | "yoga" | "strength" | "cardio" | "easy-run" | "long-run" | "double-session";
 type Intensity = "easy" | "moderate" | "hard";
 type Sweat = "low" | "medium" | "high";
-type Tab = "today" | "profile";
+type Tab = "profile" | "supplements" | "workout";
 type AdviceStatus = "recommended" | "conditional" | "routine" | "not-needed" | "check";
 
 interface Profile { name: string; age: number | ""; sex: "female" | "male"; heightCm: number | ""; weightKg: number | ""; goal: Goal; }
-interface Training { workout: Workout; duration: number; intensity: Intensity; sweat: Sweat; }
+interface Training { workout: Workout; duration: number; intensity: Intensity; sweat: Sweat; caloriesBurned: number | ""; }
 interface Supplement { id: string; name: string; detail: string; custom?: boolean; }
 interface Advice extends Supplement { status: AdviceStatus; reason: string; }
 
@@ -32,12 +32,19 @@ const defaultSupplements: Supplement[] = [
 ];
 
 const defaultProfile: Profile = { name: "", age: "", sex: "female", heightCm: "", weightKg: "", goal: "recomposition" };
-const defaultTraining: Training = { workout: "strength", duration: 60, intensity: "moderate", sweat: "medium" };
+const defaultTraining: Training = { workout: "strength", duration: 60, intensity: "moderate", sweat: "medium", caloriesBurned: "" };
 const statusOrder: AdviceStatus[] = ["recommended", "conditional", "routine", "not-needed", "check"];
 const statusLabels: Record<AdviceStatus, string> = { recommended: "Recommended today", conditional: "Only if needed", routine: "Usual routine", "not-needed": "Not needed today", check: "Check first" };
 
 function safelyLoad<T>(key: string, fallback: T): T { try { const value = localStorage.getItem(key); return value ? JSON.parse(value) as T : fallback; } catch { return fallback; } }
 function isProfileComplete(profile: Profile) { return profile.age !== "" && profile.heightCm !== "" && profile.weightKg !== ""; }
+function estimateCaloriesBurned(profile: Profile, training: Training) {
+  if (training.workout === "rest") return 0;
+  const weight = profile.weightKg === "" ? 60 : profile.weightKg;
+  const mets: Record<Workout, number> = { rest: 1, yoga: 2.8, strength: 5, cardio: 7, "easy-run": 7, "long-run": 9, "double-session": 9 };
+  const intensity: Record<Intensity, number> = { easy: .8, moderate: 1, hard: 1.2 };
+  return Math.round(mets[training.workout] * intensity[training.intensity] * 3.5 * weight / 200 * training.duration);
+}
 
 function getAdvice(item: Supplement, training: Training): Advice {
   if (item.custom) return { ...item, status: "check", reason: "Not automatically assessed. Follow the product label and professional advice." };
@@ -64,7 +71,7 @@ function App() {
   const [training, setTraining] = useState<Training>(() => safelyLoad(TRAINING_KEY, defaultTraining));
   const [inventory, setInventory] = useState<Supplement[]>(() => safelyLoad(INVENTORY_KEY, defaultSupplements));
   const [selected, setSelected] = useState<string[]>(() => safelyLoad(SELECTED_KEY, []));
-  const [tab, setTab] = useState<Tab>(() => isProfileComplete(initialProfile) ? "today" : "profile");
+  const [tab, setTab] = useState<Tab>(() => isProfileComplete(initialProfile) ? "workout" : "profile");
   const [manageInventory, setManageInventory] = useState(false);
   const [name, setName] = useState("");
   const [detail, setDetail] = useState("");
@@ -80,8 +87,9 @@ function App() {
   useEffect(() => { if (!notice) return; const timer = window.setTimeout(() => setNotice(""), 2600); return () => window.clearTimeout(timer); }, [notice]);
 
   const advice = useMemo(() => inventory.filter((item) => selected.includes(item.id)).map((item) => getAdvice(item, training)).sort((a, b) => statusOrder.indexOf(a.status) - statusOrder.indexOf(b.status)), [inventory, selected, training]);
+  const estimatedBurn = useMemo(() => estimateCaloriesBurned(profile, training), [profile, training]);
   function updateProfile<K extends keyof Profile>(field: K, value: Profile[K]) { setProfile((current) => ({ ...current, [field]: value })); }
-  function updateTraining<K extends keyof Training>(field: K, value: Training[K]) { setTraining((current) => ({ ...current, [field]: value })); setResults(null); }
+  function updateTraining<K extends Exclude<keyof Training, "caloriesBurned">>(field: K, value: Training[K]) { setTraining((current) => ({ ...current, [field]: value, caloriesBurned: "" })); setResults(null); }
   function numericProfile(field: "age" | "heightCm" | "weightKg", value: string) { updateProfile(field, value === "" ? "" : Number(value)); }
   function toggleSupplement(id: string) { setSelected((current) => current.includes(id) ? current.filter((value) => value !== id) : [...current, id]); }
   function resetForm() { setName(""); setDetail(""); setEditingId(null); }
@@ -103,9 +111,7 @@ function App() {
     if (age < 18 || age > 100 || heightCm < 120 || heightCm > 230 || weightKg < 35 || weightKg > 250) { setTab("profile"); setNotice("Check your age, height and weight"); return; }
     const bmr = 10 * weightKg + 6.25 * heightCm - 5 * age + (sex === "male" ? 5 : -161);
     const goalFactor: Record<Goal, number> = { "fat-loss": .88, recomposition: .95, maintain: 1, "muscle-gain": 1.08 };
-    const intensityFactor: Record<Intensity, number> = { easy: .75, moderate: 1, hard: 1.25 };
-    const workoutPerHour: Record<Workout, number> = { rest: 0, yoga: 80, strength: 180, cardio: 220, "easy-run": 200, "long-run": 300, "double-session": 330 };
-    const calorieTarget = bmr * 1.4 * goalFactor[goal] + workoutPerHour[training.workout] * (training.duration / 60) * intensityFactor[training.intensity];
+    const calorieTarget = bmr * 1.4 * goalFactor[goal] + (training.caloriesBurned === "" ? estimatedBurn : training.caloriesBurned);
     const proteinFactor: Record<Goal, number> = { "fat-loss": 2, recomposition: 1.9, maintain: 1.6, "muscle-gain": 1.8 };
     const protein = Math.round(weightKg * proteinFactor[goal]); const fat = Math.round(weightKg * .8);
     setResults({ calories: Math.round(calorieTarget), protein, fat, carbs: Math.max(0, Math.round((calorieTarget - protein * 4 - fat * 9) / 4)) });
@@ -115,24 +121,25 @@ function App() {
 
   return <main className="page"><section className="calculator">
     <header><p className="eyebrow">DAILY TRAINING NUTRITION</p><h1>Daily Fuel</h1><p className="intro">A simple daily target and supplement plan built around the products you already own.</p></header>
-    <nav className="tabs" aria-label="Daily Fuel sections"><button className={tab === "today" ? "active" : ""} onClick={() => setTab("today")}>Today</button><button className={tab === "profile" ? "active" : ""} onClick={() => setTab("profile")}>Profile & inventory</button></nav>
+    <nav className="tabs three-tabs" aria-label="Daily Fuel sections"><button className={tab === "profile" ? "active" : ""} onClick={() => setTab("profile")}>Profile</button><button className={tab === "supplements" ? "active" : ""} onClick={() => setTab("supplements")}>Supplements</button><button className={tab === "workout" ? "active" : ""} onClick={() => setTab("workout")}>Workout</button></nav>
 
-    {tab === "today" ? <>
+    {tab === "workout" ? <>
       {!isProfileComplete(profile) && <button className="setup-prompt" onClick={() => setTab("profile")}><strong>Complete your profile</strong><span>Add age, height and weight before calculating →</span></button>}
       <section className="panel"><div className="section-heading"><span>01</span><div><h2>Today&apos;s training</h2><p>Adjust what is different today.</p></div></div><div className="form-grid">
         <label className="full-width">Workout<select value={training.workout} onChange={(event) => updateTraining("workout", event.target.value as Workout)}><option value="rest">Rest day</option><option value="yoga">Yoga or Pilates</option><option value="strength">Strength or BFT strength</option><option value="cardio">BFT cardio or mixed training</option><option value="easy-run">Easy run</option><option value="long-run">Long or hard run</option><option value="double-session">Double session</option></select></label>
         <label>Duration<select value={training.duration} onChange={(event) => updateTraining("duration", Number(event.target.value))}><option value="30">30 minutes</option><option value="45">45 minutes</option><option value="60">60 minutes</option><option value="75">75 minutes</option><option value="90">90+ minutes</option></select></label>
         <label>Intensity<select value={training.intensity} onChange={(event) => updateTraining("intensity", event.target.value as Intensity)}><option value="easy">Easy</option><option value="moderate">Moderate</option><option value="hard">Hard</option></select></label>
         <label className="full-width">Sweat level<select value={training.sweat} onChange={(event) => updateTraining("sweat", event.target.value as Sweat)}><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
+        <label className="full-width">Calories burned<input type="number" min="0" max="3000" value={training.caloriesBurned === "" ? estimatedBurn : training.caloriesBurned} onChange={(event) => setTraining((current) => ({ ...current, caloriesBurned: event.target.value === "" ? "" : Number(event.target.value) }))} /><small className="field-note">Suggested ballpark: {estimatedBurn} kcal, based on weight, workout, duration and intensity. <button type="button" onClick={() => setTraining((current) => ({ ...current, caloriesBurned: "" }))}>Use estimate</button></small></label>
       </div></section><button className="calculate-button sticky-action" onClick={calculatePlan}>Calculate today&apos;s plan</button>
       {results && <section className="results" aria-live="polite"><div className="results-heading"><div><p className="eyebrow">TODAY&apos;S ESTIMATE</p><h2>{profile.name ? `${profile.name}'s plan` : "Your daily plan"}</h2></div><strong>{results.calories} kcal</strong></div><div className="macro-grid"><article><span>Protein</span><strong>{results.protein} g</strong></article><article><span>Carbohydrates</span><strong>{results.carbs} g</strong></article><article><span>Fat</span><strong>{results.fat} g</strong></article></div>
-        <div className="supplement-plan"><div className="section-heading compact"><span>02</span><div><h2>What matters today</h2><p>Only products in your inventory are shown.</p></div></div>{advice.length === 0 ? <div className="empty-state">No inventory items selected. Add or select products under Profile & inventory.</div> : <div className="advice-list">{advice.map((item) => <article className={`advice-card ${item.status}`} key={item.id}><span className="status">{statusLabels[item.status]}</span><h3>{item.name}</h3><p>{item.reason}</p></article>)}</div>}<div className="safety-note"><strong>Safety check</strong><p>Supplements can interact with medicines and health conditions. Check with a clinician or pharmacist if pregnant, managing a condition, taking medication, or unsure about combined ingredients. Vitamin K can interact with warfarin.</p></div></div>
+        <div className="supplement-plan"><div className="section-heading compact"><span>02</span><div><h2>What matters today</h2><p>Only products in your inventory are shown.</p></div></div>{advice.length === 0 ? <div className="empty-state">No inventory items selected. Add or select products under Supplements.</div> : <div className="advice-list">{advice.map((item) => <article className={`advice-card ${item.status}`} key={item.id}><span className="status">{statusLabels[item.status]}</span><h3>{item.name}</h3><p>{item.reason}</p></article>)}</div>}<div className="safety-note"><strong>Safety check</strong><p>Supplements can interact with medicines and health conditions. Check with a clinician or pharmacist if pregnant, managing a condition, taking medication, or unsure about combined ingredients. Vitamin K can interact with warfarin.</p></div></div>
       </section>}
     </> : <>
-      <section className="panel"><div className="section-heading"><span>01</span><div><h2>Your profile</h2><p>Set this once; update it when your details change.</p></div></div><div className="form-grid"><label>Name<input value={profile.name} placeholder="Your name" onChange={(event) => updateProfile("name", event.target.value)} /></label><label>Age<input type="number" value={profile.age} placeholder="e.g. 44" min="18" max="100" onChange={(event) => numericProfile("age", event.target.value)} /></label><label>Sex<select value={profile.sex} onChange={(event) => updateProfile("sex", event.target.value as Profile["sex"])}><option value="female">Female</option><option value="male">Male</option></select></label><label>Height in cm<input type="number" value={profile.heightCm} placeholder="e.g. 163" min="120" max="230" onChange={(event) => numericProfile("heightCm", event.target.value)} /></label><label>Weight in kg<input type="number" value={profile.weightKg} placeholder="e.g. 55" min="35" max="250" step=".1" onChange={(event) => numericProfile("weightKg", event.target.value)} /></label><label>Goal<select value={profile.goal} onChange={(event) => updateProfile("goal", event.target.value as Goal)}><option value="fat-loss">Lose fat</option><option value="recomposition">Lose fat and build muscle</option><option value="maintain">Maintain</option><option value="muscle-gain">Build muscle</option></select></label></div></section>
-      <section className="panel supplement-panel"><div className="section-heading inventory-heading"><span>02</span><div><h2>My supplement inventory</h2><p>Select what you have. Daily Fuel recommends only from these items.</p></div><button className="manage-button" onClick={() => { setManageInventory((value) => !value); resetForm(); }}>{manageInventory ? "Done" : "Manage"}</button></div><div className="supplement-list">{inventory.map((item) => <div className={`supplement-option ${selected.includes(item.id) ? "selected" : ""}`} key={item.id}><label className="supplement-choice"><input type="checkbox" checked={selected.includes(item.id)} onChange={() => toggleSupplement(item.id)} /><span className="checkmark" aria-hidden="true">{selected.includes(item.id) ? "✓" : ""}</span><span><strong>{item.name}</strong><small>{item.detail}</small></span></label>{manageInventory && <span className="inventory-actions">{item.custom && <button onClick={() => { setEditingId(item.id); setName(item.name); setDetail(item.detail); }}>Edit</button>}<button className="remove-supplement" onClick={() => removeSupplement(item)}>Remove</button></span>}</div>)}</div>
+      {tab === "profile" && <><section className="panel"><div className="section-heading"><span>01</span><div><h2>Your profile</h2><p>Set this once; update it when your details change.</p></div></div><div className="form-grid"><label>Name<input value={profile.name} placeholder="Your name" onChange={(event) => updateProfile("name", event.target.value)} /></label><label>Age<input type="number" value={profile.age} placeholder="e.g. 44" min="18" max="100" onChange={(event) => numericProfile("age", event.target.value)} /></label><label>Sex<select value={profile.sex} onChange={(event) => updateProfile("sex", event.target.value as Profile["sex"])}><option value="female">Female</option><option value="male">Male</option></select></label><label>Height in cm<input type="number" value={profile.heightCm} placeholder="e.g. 163" min="120" max="230" onChange={(event) => numericProfile("heightCm", event.target.value)} /></label><label>Weight in kg<input type="number" value={profile.weightKg} placeholder="e.g. 55" min="35" max="250" step=".1" onChange={(event) => numericProfile("weightKg", event.target.value)} /></label><label>Goal<select value={profile.goal} onChange={(event) => updateProfile("goal", event.target.value as Goal)}><option value="fat-loss">Lose fat</option><option value="recomposition">Lose fat and build muscle</option><option value="maintain">Maintain</option><option value="muscle-gain">Build muscle</option></select></label></div></section><button className="continue-button" onClick={() => setTab("supplements")}>Continue to Supplements →</button></>}
+      {tab === "supplements" && <><section className="panel supplement-panel"><div className="section-heading inventory-heading"><span>02</span><div><h2>My supplement inventory</h2><p>Select what you have. Daily Fuel recommends only from these items.</p></div><button className="manage-button" onClick={() => { setManageInventory((value) => !value); resetForm(); }}>{manageInventory ? "Done" : "Manage"}</button></div><div className="supplement-list">{inventory.map((item) => <div className={`supplement-option ${selected.includes(item.id) ? "selected" : ""}`} key={item.id}><label className="supplement-choice"><input type="checkbox" checked={selected.includes(item.id)} onChange={() => toggleSupplement(item.id)} /><span className="checkmark" aria-hidden="true">{selected.includes(item.id) ? "✓" : ""}</span><span><strong>{item.name}</strong><small>{item.detail}</small></span></label>{manageInventory && <span className="inventory-actions">{item.custom && <button onClick={() => { setEditingId(item.id); setName(item.name); setDetail(item.detail); }}>Edit</button>}<button className="remove-supplement" onClick={() => removeSupplement(item)}>Remove</button></span>}</div>)}</div>
         {inventory.length === 0 && <p className="empty-inventory">Your inventory is empty.</p>}<p className="selection-count">{selected.length} of {inventory.length} available products selected</p>{manageInventory && <><form className="add-supplement" onSubmit={saveSupplement}><h3>{editingId ? "Edit custom supplement" : "Add a supplement"}</h3><label>Name<input value={name} maxLength={80} placeholder="e.g. Collagen peptides" onChange={(event) => setName(event.target.value)} /></label><label>Serving or ingredients<input value={detail} maxLength={120} placeholder="Optional" onChange={(event) => setDetail(event.target.value)} /></label><div className="form-actions"><button className="save-supplement" disabled={!name.trim()}>{editingId ? "Save changes" : "Add to inventory"}</button>{editingId && <button className="cancel-edit" type="button" onClick={resetForm}>Cancel</button>}</div></form>{defaultSupplements.some((item) => !inventory.some((entry) => entry.id === item.id)) && <button className="restore-button" onClick={restoreDefaults}>Restore default supplements</button>}</>}
-      </section><button className="continue-button" onClick={() => setTab("today")}>Continue to Today →</button>
+      </section><button className="continue-button" onClick={() => setTab("workout")}>Continue to Workout →</button></>}
     </>}
     <div className="privacy"><p>Your information stays in this browser. General estimates only—not medical or dietetic advice.</p><button className="clear-button" onClick={clearAll}>Clear my saved data</button></div>{notice && <div className="toast" role="status"><span>{notice}</span>{removed && notice === "Removed from inventory" && <button onClick={undoRemove}>Undo</button>}</div>}
   </section></main>;
