@@ -11,6 +11,7 @@ type AdviceStatus = "recommended" | "conditional" | "routine" | "not-needed" | "
 
 interface Profile { name: string; age: number | ""; sex: "female" | "male"; heightCm: number | ""; weightKg: number | ""; goal: Goal; }
 interface Training { workout: Workout; duration: number; intensity: Intensity; sweat: Sweat; caloriesBurned: number | ""; proteinEaten: number | ""; }
+interface ProteinIntake { wheyProtein: number | ""; chicken: number | ""; pork: number | ""; beef: number | ""; fish: number | ""; tofu: number | ""; otherProtein: number | ""; }
 interface Supplement { id: string; name: string; detail: string; custom?: boolean; }
 interface Advice extends Supplement { status: AdviceStatus; reason: string; amount: string; }
 
@@ -18,6 +19,7 @@ const PROFILE_KEY = "dailyFuelProfileV3";
 const TRAINING_KEY = "dailyFuelTrainingV3";
 const SELECTED_KEY = "dailyFuelSupplementsV3";
 const INVENTORY_KEY = "dailyFuelInventoryV3";
+const PROTEIN_INTAKE_KEY = "dailyFuelProteinIntakeV1";
 
 const defaultSupplements: Supplement[] = [
   { id: "whey", name: "Whey Protein", detail: "Protein top-up" },
@@ -33,6 +35,8 @@ const defaultSupplements: Supplement[] = [
 
 const defaultProfile: Profile = { name: "", age: "", sex: "female", heightCm: "", weightKg: "", goal: "recomposition" };
 const defaultTraining: Training = { workout: "strength", duration: 60, intensity: "moderate", sweat: "medium", caloriesBurned: "", proteinEaten: "" };
+const defaultProteinIntake: ProteinIntake = { wheyProtein: "", chicken: "", pork: "", beef: "", fish: "", tofu: "", otherProtein: "" };
+const proteinPer100 = { chicken: 31, pork: 27, beef: 26, fish: 25, tofu: 12 } as const;
 const statusOrder: AdviceStatus[] = ["recommended", "conditional", "routine", "not-needed", "check"];
 const statusLabels: Record<AdviceStatus, string> = { recommended: "Recommended today", conditional: "Only if needed", routine: "Usual routine", "not-needed": "Not needed today", check: "Check first" };
 
@@ -48,6 +52,7 @@ function isTraining(value: unknown): value is Training {
 }
 function isInventory(value: unknown): value is Supplement[] { return Array.isArray(value) && value.length <= 100 && value.every((item) => isRecord(item) && typeof item.id === "string" && item.id.length <= 100 && typeof item.name === "string" && item.name.length <= 80 && typeof item.detail === "string" && item.detail.length <= 120 && (item.custom === undefined || typeof item.custom === "boolean")); }
 function isSelection(value: unknown): value is string[] { return Array.isArray(value) && value.length <= 100 && value.every((item) => typeof item === "string" && item.length <= 100); }
+function isProteinIntake(value: unknown): value is ProteinIntake { return isRecord(value) && isOptionalNumber(value.wheyProtein, 0, 500) && isOptionalNumber(value.chicken, 0, 2000) && isOptionalNumber(value.pork, 0, 2000) && isOptionalNumber(value.beef, 0, 2000) && isOptionalNumber(value.fish, 0, 2000) && isOptionalNumber(value.tofu, 0, 2000) && isOptionalNumber(value.otherProtein, 0, 500); }
 function safelyLoad<T>(key: string, fallback: T, validate: (value: unknown) => value is T): T { try { const value: unknown = JSON.parse(localStorage.getItem(key) ?? "null"); return validate(value) ? value : fallback; } catch { return fallback; } }
 function isProfileComplete(profile: Profile) { return profile.age !== "" && profile.heightCm !== "" && profile.weightKg !== ""; }
 function estimateCaloriesBurned(profile: Profile, training: Training) {
@@ -83,6 +88,7 @@ function App() {
   const [training, setTraining] = useState<Training>(() => safelyLoad(TRAINING_KEY, defaultTraining, isTraining));
   const [inventory, setInventory] = useState<Supplement[]>(() => safelyLoad(INVENTORY_KEY, defaultSupplements, isInventory));
   const [selected, setSelected] = useState<string[]>(() => safelyLoad(SELECTED_KEY, [], isSelection));
+  const [proteinIntake, setProteinIntake] = useState<ProteinIntake>(() => safelyLoad(PROTEIN_INTAKE_KEY, defaultProteinIntake, isProteinIntake));
   const [tab, setTab] = useState<Tab>(() => isProfileComplete(initialProfile) ? "workout" : "profile");
   const [manageInventory, setManageInventory] = useState(false);
   const [name, setName] = useState("");
@@ -90,19 +96,24 @@ function App() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [removed, setRemoved] = useState<Supplement | null>(null);
   const [notice, setNotice] = useState("");
-  const [results, setResults] = useState<{ calories: number; protein: number; carbs: number; fat: number; proteinRemaining: number } | null>(null);
+  const [results, setResults] = useState<{ calories: number; protein: number; carbs: number; fat: number } | null>(null);
 
   useEffect(() => localStorage.setItem(PROFILE_KEY, JSON.stringify(profile)), [profile]);
   useEffect(() => localStorage.setItem(TRAINING_KEY, JSON.stringify(training)), [training]);
   useEffect(() => localStorage.setItem(INVENTORY_KEY, JSON.stringify(inventory)), [inventory]);
   useEffect(() => localStorage.setItem(SELECTED_KEY, JSON.stringify(selected)), [selected]);
+  useEffect(() => localStorage.setItem(PROTEIN_INTAKE_KEY, JSON.stringify(proteinIntake)), [proteinIntake]);
   useEffect(() => { if (!notice) return; const timer = window.setTimeout(() => setNotice(""), 2600); return () => window.clearTimeout(timer); }, [notice]);
 
-  const advice = useMemo(() => inventory.filter((item) => selected.includes(item.id)).map((item) => getAdvice(item, training, results?.proteinRemaining ?? null)).sort((a, b) => statusOrder.indexOf(a.status) - statusOrder.indexOf(b.status)), [inventory, selected, training, results]);
+  const totalProteinEaten = useMemo(() => Math.round(((proteinIntake.wheyProtein || 0) + (proteinIntake.chicken || 0) * proteinPer100.chicken / 100 + (proteinIntake.pork || 0) * proteinPer100.pork / 100 + (proteinIntake.beef || 0) * proteinPer100.beef / 100 + (proteinIntake.fish || 0) * proteinPer100.fish / 100 + (proteinIntake.tofu || 0) * proteinPer100.tofu / 100 + (proteinIntake.otherProtein || 0)) * 10) / 10, [proteinIntake]);
+  const proteinRemaining = results ? Math.max(0, Math.round((results.protein - totalProteinEaten) * 10) / 10) : null;
+  const remainingProtein = proteinRemaining ?? 0;
+  const advice = useMemo(() => inventory.filter((item) => selected.includes(item.id)).map((item) => getAdvice(item, training, proteinRemaining)).sort((a, b) => statusOrder.indexOf(a.status) - statusOrder.indexOf(b.status)), [inventory, selected, training, proteinRemaining]);
   const estimatedBurn = useMemo(() => estimateCaloriesBurned(profile, training), [profile, training]);
   function updateProfile<K extends keyof Profile>(field: K, value: Profile[K]) { setProfile((current) => ({ ...current, [field]: value })); }
   function updateTraining<K extends "workout" | "duration" | "intensity" | "sweat">(field: K, value: Training[K]) { setTraining((current) => ({ ...current, [field]: value, caloriesBurned: "" })); setResults(null); }
   function numericProfile(field: "age" | "heightCm" | "weightKg", value: string) { updateProfile(field, value === "" ? "" : Number(value)); }
+  function updateProteinIntake(field: keyof ProteinIntake, value: string) { setProteinIntake((current) => ({ ...current, [field]: value === "" ? "" : Number(value) })); }
   function toggleSupplement(id: string) { setSelected((current) => current.includes(id) ? current.filter((value) => value !== id) : [...current, id]); }
   function resetForm() { setName(""); setDetail(""); setEditingId(null); }
 
@@ -123,17 +134,16 @@ function App() {
     if (age < 18 || age > 100 || heightCm < 120 || heightCm > 230 || weightKg < 35 || weightKg > 250) { setTab("profile"); setNotice("Check your age, height and weight"); return; }
     const caloriesBurned = training.caloriesBurned === "" ? estimatedBurn : training.caloriesBurned;
     if (!Number.isFinite(caloriesBurned) || caloriesBurned < 0 || caloriesBurned > 3000) { setNotice("Calories burned must be between 0 and 3,000"); return; }
-    if (training.proteinEaten !== "" && (!Number.isFinite(training.proteinEaten) || training.proteinEaten < 0 || training.proteinEaten > 500)) { setNotice("Protein eaten must be between 0 and 500 g"); return; }
+    if (!isProteinIntake(proteinIntake)) { setNotice("Check the protein food amounts entered"); return; }
     const bmr = 10 * weightKg + 6.25 * heightCm - 5 * age + (sex === "male" ? 5 : -161);
     const goalFactor: Record<Goal, number> = { "fat-loss": .88, recomposition: .95, maintain: 1, "muscle-gain": 1.08 };
     const calorieTarget = bmr * 1.4 * goalFactor[goal] + caloriesBurned;
     const proteinFactor: Record<Goal, number> = { "fat-loss": 2, recomposition: 1.9, maintain: 1.6, "muscle-gain": 1.8 };
     const protein = Math.round(weightKg * proteinFactor[goal]); const fat = Math.round(weightKg * .8);
-    const proteinEaten = training.proteinEaten === "" ? 0 : training.proteinEaten;
-    setResults({ calories: Math.round(calorieTarget), protein, fat, carbs: Math.max(0, Math.round((calorieTarget - protein * 4 - fat * 9) / 4)), proteinRemaining: Math.max(0, protein - proteinEaten) });
+    setResults({ calories: Math.round(calorieTarget), protein, fat, carbs: Math.max(0, Math.round((calorieTarget - protein * 4 - fat * 9) / 4)) });
   }
 
-  function clearAll() { [PROFILE_KEY, TRAINING_KEY, INVENTORY_KEY, SELECTED_KEY].forEach((key) => localStorage.removeItem(key)); setProfile(defaultProfile); setTraining(defaultTraining); setInventory(defaultSupplements); setSelected([]); setResults(null); setTab("profile"); resetForm(); setNotice("Saved data cleared"); }
+  function clearAll() { [PROFILE_KEY, TRAINING_KEY, INVENTORY_KEY, SELECTED_KEY, PROTEIN_INTAKE_KEY].forEach((key) => localStorage.removeItem(key)); setProfile(defaultProfile); setTraining(defaultTraining); setProteinIntake(defaultProteinIntake); setInventory(defaultSupplements); setSelected([]); setResults(null); setTab("profile"); resetForm(); setNotice("Saved data cleared"); }
 
   return <main className="page"><section className="calculator">
     <header><p className="eyebrow">DAILY TRAINING NUTRITION</p><h1>Daily Fuel</h1><p className="intro">A simple daily target and supplement plan built around the products you already own.</p></header>
@@ -147,12 +157,19 @@ function App() {
         <label>Intensity<select value={training.intensity} onChange={(event) => updateTraining("intensity", event.target.value as Intensity)}><option value="easy">Easy</option><option value="moderate">Moderate</option><option value="hard">Hard</option></select></label>
         <label className="full-width">Sweat level<select value={training.sweat} onChange={(event) => updateTraining("sweat", event.target.value as Sweat)}><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
         <label className="full-width">Calories burned<input type="number" min="0" max="3000" value={training.caloriesBurned === "" ? estimatedBurn : training.caloriesBurned} onChange={(event) => setTraining((current) => ({ ...current, caloriesBurned: event.target.value === "" ? "" : Number(event.target.value) }))} /><small className="field-note">Suggested ballpark: {estimatedBurn} kcal, based on weight, workout, duration and intensity. <button type="button" onClick={() => setTraining((current) => ({ ...current, caloriesBurned: "" }))}>Use estimate</button></small></label>
-        <label className="full-width">Protein eaten so far<input type="number" min="0" max="500" value={training.proteinEaten} placeholder="e.g. 60" onChange={(event) => { setTraining((current) => ({ ...current, proteinEaten: event.target.value === "" ? "" : Number(event.target.value) })); setResults(null); }} /><small className="field-note">Optional. Enter grams eaten today so the app can estimate what remains.</small></label>
-      </div></section><button className="calculate-button sticky-action" onClick={calculatePlan}>Calculate today&apos;s plan</button>
+      </div><div className="protein-tracker"><div className="tracker-heading"><div><p className="eyebrow">PROTEIN INTAKE</p><h3>What have you eaten?</h3></div><strong>{totalProteinEaten} g protein</strong></div><p className="tracker-intro">Enter cooked food weights. For whey and Other, enter the actual protein grams shown on the label.</p><div className="intake-grid">
+        <label><span>🥤 Whey protein</span><span className="input-unit"><input type="number" min="0" max="500" value={proteinIntake.wheyProtein} placeholder="0" onChange={(event) => updateProteinIntake("wheyProtein", event.target.value)} /><small>g protein</small></span></label>
+        <label><span>🍗 Chicken</span><span className="input-unit"><input type="number" min="0" max="2000" value={proteinIntake.chicken} placeholder="0" onChange={(event) => updateProteinIntake("chicken", event.target.value)} /><small>g cooked</small></span></label>
+        <label><span>🥩 Lean pork</span><span className="input-unit"><input type="number" min="0" max="2000" value={proteinIntake.pork} placeholder="0" onChange={(event) => updateProteinIntake("pork", event.target.value)} /><small>g cooked</small></span></label>
+        <label><span>🥩 Lean beef</span><span className="input-unit"><input type="number" min="0" max="2000" value={proteinIntake.beef} placeholder="0" onChange={(event) => updateProteinIntake("beef", event.target.value)} /><small>g cooked</small></span></label>
+        <label><span>🐟 Fish</span><span className="input-unit"><input type="number" min="0" max="2000" value={proteinIntake.fish} placeholder="0" onChange={(event) => updateProteinIntake("fish", event.target.value)} /><small>g cooked</small></span></label>
+        <label><span>◻️ Tofu</span><span className="input-unit"><input type="number" min="0" max="2000" value={proteinIntake.tofu} placeholder="0" onChange={(event) => updateProteinIntake("tofu", event.target.value)} /><small>g</small></span></label>
+        <label className="full-width"><span>＋ Other protein</span><span className="input-unit"><input type="number" min="0" max="500" value={proteinIntake.otherProtein} placeholder="0" onChange={(event) => updateProteinIntake("otherProtein", event.target.value)} /><small>g protein</small></span></label>
+      </div><button className="reset-intake" type="button" onClick={() => setProteinIntake(defaultProteinIntake)}>Reset today&apos;s intake</button></div></section><button className="calculate-button sticky-action" onClick={calculatePlan}>Calculate today&apos;s plan</button>
       {results && <section className="results" aria-live="polite"><div className="results-heading"><div><p className="eyebrow">TODAY&apos;S ESTIMATE</p><h2>{profile.name ? `${profile.name}'s plan` : "Your daily plan"}</h2></div><strong>{results.calories} kcal</strong></div><div className="macro-grid"><article><span>Protein</span><strong>{results.protein} g</strong></article><article><span>Carbohydrates</span><strong>{results.carbs} g</strong></article><article><span>Fat</span><strong>{results.fat} g</strong></article></div>
-        <div className="protein-options"><div className="protein-heading"><div><p className="eyebrow">PROTEIN GAP</p><h2>{results.proteinRemaining === 0 ? "Target covered" : `${results.proteinRemaining} g remaining`}</h2></div><p>{results.proteinRemaining === 0 ? "No additional protein is suggested from the information entered." : "Choose a mix across meals. These are approximate cooked-food equivalents, not amounts to eat all at once."}</p></div>
-          {results.proteinRemaining > 0 && <div className="food-grid"><article><span className="food-icon">🥤</span><strong>Whey shake</strong><b>{results.proteinRemaining <= 12 ? "½ serving" : "1 serving"}</b><small>About {Math.min(25, results.proteinRemaining)} g protein; check your label</small></article><article><span className="food-icon">🍗</span><strong>Chicken breast</strong><b>~{Math.ceil(results.proteinRemaining / 31 * 10) * 10} g</b><small>Cooked weight</small></article><article><span className="food-icon">🥩</span><strong>Lean pork</strong><b>~{Math.ceil(results.proteinRemaining / 27 * 10) * 10} g</b><small>Cooked weight</small></article><article><span className="food-icon">🥩</span><strong>Lean beef</strong><b>~{Math.ceil(results.proteinRemaining / 26 * 10) * 10} g</b><small>Cooked weight</small></article></div>}
-          <p className="food-source">Food values vary by cut and cooking method. Estimates use roughly 31 g protein/100 g chicken, 27 g/100 g lean pork and 26 g/100 g lean beef.</p>
+        <div className="protein-options"><div className="protein-heading"><div><p className="eyebrow">PROTEIN GAP</p><h2>{remainingProtein === 0 ? "Target covered" : `${remainingProtein} g remaining`}</h2></div><p>{remainingProtein === 0 ? `You have logged ${totalProteinEaten} g against your ${results.protein} g target.` : `You have logged ${totalProteinEaten} g. Choose a mix of the options below across meals—not all of them.`}</p></div>
+          {remainingProtein > 0 && <div className="food-grid"><article><span className="food-icon">🥤</span><strong>Whey protein</strong><b>{remainingProtein <= 12 ? "½ serving" : "1 serving"}</b><small>Up to {Math.min(25, remainingProtein)} g protein; check label</small></article><article><span className="food-icon">🍗</span><strong>Chicken breast</strong><b>~{Math.ceil(remainingProtein / proteinPer100.chicken * 10) * 10} g</b><small>Cooked weight</small></article><article><span className="food-icon">🥩</span><strong>Lean pork</strong><b>~{Math.ceil(remainingProtein / proteinPer100.pork * 10) * 10} g</b><small>Cooked weight</small></article><article><span className="food-icon">🥩</span><strong>Lean beef</strong><b>~{Math.ceil(remainingProtein / proteinPer100.beef * 10) * 10} g</b><small>Cooked weight</small></article><article><span className="food-icon">🐟</span><strong>Fish</strong><b>~{Math.ceil(remainingProtein / proteinPer100.fish * 10) * 10} g</b><small>Cooked weight</small></article><article><span className="food-icon">◻️</span><strong>Firm tofu</strong><b>~{Math.ceil(remainingProtein / proteinPer100.tofu * 10) * 10} g</b><small>Approximate weight</small></article></div>}
+          <p className="food-source">Food values vary by product, cut and cooking method. Estimates use about 31 g protein/100 g chicken, 27 g pork, 26 g beef, 25 g fish and 12 g firm tofu.</p>
         </div>
         <div className="supplement-plan"><div className="section-heading compact"><span>02</span><div><h2>What matters today</h2><p>Only products in your inventory are shown.</p></div></div>{advice.length === 0 ? <div className="empty-state">No inventory items selected. Add or select products under Supplements.</div> : <div className="advice-list">{advice.map((item) => <article className={`advice-card ${item.status}`} key={item.id}><span className="status">{statusLabels[item.status]}</span><h3>{item.name}</h3><b className="advice-amount">{item.amount}</b><p>{item.reason}</p></article>)}</div>}<div className="safety-note"><strong>Safety check</strong><p>Supplements can interact with medicines and health conditions. Check with a clinician or pharmacist if pregnant, managing a condition, taking medication, or unsure about combined ingredients. Vitamin K can interact with warfarin.</p></div></div>
       </section>}
