@@ -10,9 +10,9 @@ type Tab = "profile" | "supplements" | "workout";
 type AdviceStatus = "recommended" | "conditional" | "routine" | "not-needed" | "check";
 
 interface Profile { name: string; age: number | ""; sex: "female" | "male"; heightCm: number | ""; weightKg: number | ""; goal: Goal; }
-interface Training { workout: Workout; duration: number; intensity: Intensity; sweat: Sweat; caloriesBurned: number | ""; }
+interface Training { workout: Workout; duration: number; intensity: Intensity; sweat: Sweat; caloriesBurned: number | ""; proteinEaten: number | ""; }
 interface Supplement { id: string; name: string; detail: string; custom?: boolean; }
-interface Advice extends Supplement { status: AdviceStatus; reason: string; }
+interface Advice extends Supplement { status: AdviceStatus; reason: string; amount: string; }
 
 const PROFILE_KEY = "dailyFuelProfileV3";
 const TRAINING_KEY = "dailyFuelTrainingV3";
@@ -32,7 +32,7 @@ const defaultSupplements: Supplement[] = [
 ];
 
 const defaultProfile: Profile = { name: "", age: "", sex: "female", heightCm: "", weightKg: "", goal: "recomposition" };
-const defaultTraining: Training = { workout: "strength", duration: 60, intensity: "moderate", sweat: "medium", caloriesBurned: "" };
+const defaultTraining: Training = { workout: "strength", duration: 60, intensity: "moderate", sweat: "medium", caloriesBurned: "", proteinEaten: "" };
 const statusOrder: AdviceStatus[] = ["recommended", "conditional", "routine", "not-needed", "check"];
 const statusLabels: Record<AdviceStatus, string> = { recommended: "Recommended today", conditional: "Only if needed", routine: "Usual routine", "not-needed": "Not needed today", check: "Check first" };
 
@@ -46,22 +46,22 @@ function estimateCaloriesBurned(profile: Profile, training: Training) {
   return Math.round(mets[training.workout] * intensity[training.intensity] * 3.5 * weight / 200 * training.duration);
 }
 
-function getAdvice(item: Supplement, training: Training): Advice {
-  if (item.custom) return { ...item, status: "check", reason: "Not automatically assessed. Follow the product label and professional advice." };
+function getAdvice(item: Supplement, training: Training, proteinRemaining: number | null): Advice {
+  if (item.custom) return { ...item, status: "check", amount: "Not calculated", reason: "Not automatically assessed. Follow the product label and professional advice." };
   const trainingDay = training.workout !== "rest";
   const demanding = training.duration >= 60 && (training.intensity === "hard" || training.workout === "double-session");
   const hydrationNeed = trainingDay && (training.sweat === "high" || training.duration >= 75 || training.workout === "long-run" || training.workout === "double-session");
   switch (item.id) {
-    case "whey": return { ...item, status: ["strength", "cardio", "long-run", "double-session"].includes(training.workout) ? "conditional" : "not-needed", reason: trainingDay ? "Use only if meals will not cover your protein target." : "Normal meals can usually cover today’s protein target." };
-    case "creatine": return { ...item, status: "recommended", reason: "Continue your usual daily 5 g serving. Consistency matters more than workout timing." };
-    case "electrolytes": return { ...item, status: hydrationNeed ? "recommended" : "not-needed", reason: hydrationNeed ? `Suggested because you selected ${training.duration} minutes with ${training.sweat} sweat demand.` : "Water is usually sufficient for this shorter, lower-sweat session." };
-    case "omega3": return { ...item, status: "routine", reason: "Continue with food if this is part of your normal routine; it is not workout-specific." };
-    case "d3k2": return { ...item, status: "routine", reason: "Continue only as previously advised; today’s workout does not change the need." };
-    case "calmag": return { ...item, status: "routine", reason: "Not workout-specific. Stay within the label directions and your usual plan." };
-    case "sleep": return { ...item, status: demanding ? "conditional" : "routine", reason: demanding ? "Optional tonight if already tolerated. Avoid combining with alcohol or sedating products." : "Use only as part of your established night-time routine after checking the label." };
-    case "iron": return { ...item, status: "check", reason: "Never take iron because of a workout. Use only when blood tests and a clinician confirm the need and dose." };
-    case "vitaminc": return { ...item, status: "not-needed", reason: "An additional workout dose is not needed. Avoid stacking other vitamin C products." };
-    default: return { ...item, status: "check", reason: "Follow the product label and seek professional advice if unsure." };
+    case "whey": return { ...item, status: proteinRemaining === 0 ? "not-needed" : "conditional", amount: proteinRemaining === null ? "After protein gap is calculated" : proteinRemaining === 0 ? "None needed" : `Up to ${Math.min(25, proteinRemaining)} g protein (check scoop label)`, reason: "Use whey only for the part of your protein target that meals will not cover." };
+    case "creatine": return { ...item, status: "recommended", amount: "5 g", reason: "Continue your usual daily serving. Consistency matters more than workout timing." };
+    case "electrolytes": return { ...item, status: hydrationNeed ? "recommended" : "not-needed", amount: hydrationNeed ? "1 label serving in water" : "None needed for training", reason: hydrationNeed ? `Suggested because you selected ${training.duration} minutes with ${training.sweat} sweat demand.` : "Water is usually sufficient for this shorter, lower-sweat session." };
+    case "omega3": return { ...item, status: "routine", amount: "Your usual label serving", reason: "Continue with food if this is part of your normal routine; it is not workout-specific." };
+    case "d3k2": return { ...item, status: "routine", amount: "Only the advised label serving", reason: "Continue only as previously advised; today’s workout does not change the need." };
+    case "calmag": return { ...item, status: "routine", amount: "Your usual label serving", reason: "Not workout-specific. Stay within the label directions and your usual plan." };
+    case "sleep": return { ...item, status: demanding ? "conditional" : "routine", amount: "Only the label serving", reason: demanding ? "Optional tonight if already tolerated. Avoid combining with alcohol or sedating products." : "Use only as part of your established night-time routine after checking the label." };
+    case "iron": return { ...item, status: "check", amount: "25 mg only if clinician-directed", reason: "Never take iron because of a workout. Use only when blood tests and a clinician confirm the need and dose." };
+    case "vitaminc": return { ...item, status: "not-needed", amount: "No extra workout dose", reason: "An additional workout dose is not needed. Avoid stacking other vitamin C products." };
+    default: return { ...item, status: "check", amount: "Follow the product label", reason: "Seek professional advice if unsure." };
   }
 }
 
@@ -78,7 +78,7 @@ function App() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [removed, setRemoved] = useState<Supplement | null>(null);
   const [notice, setNotice] = useState("");
-  const [results, setResults] = useState<{ calories: number; protein: number; carbs: number; fat: number } | null>(null);
+  const [results, setResults] = useState<{ calories: number; protein: number; carbs: number; fat: number; proteinRemaining: number } | null>(null);
 
   useEffect(() => localStorage.setItem(PROFILE_KEY, JSON.stringify(profile)), [profile]);
   useEffect(() => localStorage.setItem(TRAINING_KEY, JSON.stringify(training)), [training]);
@@ -86,10 +86,10 @@ function App() {
   useEffect(() => localStorage.setItem(SELECTED_KEY, JSON.stringify(selected)), [selected]);
   useEffect(() => { if (!notice) return; const timer = window.setTimeout(() => setNotice(""), 2600); return () => window.clearTimeout(timer); }, [notice]);
 
-  const advice = useMemo(() => inventory.filter((item) => selected.includes(item.id)).map((item) => getAdvice(item, training)).sort((a, b) => statusOrder.indexOf(a.status) - statusOrder.indexOf(b.status)), [inventory, selected, training]);
+  const advice = useMemo(() => inventory.filter((item) => selected.includes(item.id)).map((item) => getAdvice(item, training, results?.proteinRemaining ?? null)).sort((a, b) => statusOrder.indexOf(a.status) - statusOrder.indexOf(b.status)), [inventory, selected, training, results]);
   const estimatedBurn = useMemo(() => estimateCaloriesBurned(profile, training), [profile, training]);
   function updateProfile<K extends keyof Profile>(field: K, value: Profile[K]) { setProfile((current) => ({ ...current, [field]: value })); }
-  function updateTraining<K extends Exclude<keyof Training, "caloriesBurned">>(field: K, value: Training[K]) { setTraining((current) => ({ ...current, [field]: value, caloriesBurned: "" })); setResults(null); }
+  function updateTraining<K extends "workout" | "duration" | "intensity" | "sweat">(field: K, value: Training[K]) { setTraining((current) => ({ ...current, [field]: value, caloriesBurned: "" })); setResults(null); }
   function numericProfile(field: "age" | "heightCm" | "weightKg", value: string) { updateProfile(field, value === "" ? "" : Number(value)); }
   function toggleSupplement(id: string) { setSelected((current) => current.includes(id) ? current.filter((value) => value !== id) : [...current, id]); }
   function resetForm() { setName(""); setDetail(""); setEditingId(null); }
@@ -114,7 +114,8 @@ function App() {
     const calorieTarget = bmr * 1.4 * goalFactor[goal] + (training.caloriesBurned === "" ? estimatedBurn : training.caloriesBurned);
     const proteinFactor: Record<Goal, number> = { "fat-loss": 2, recomposition: 1.9, maintain: 1.6, "muscle-gain": 1.8 };
     const protein = Math.round(weightKg * proteinFactor[goal]); const fat = Math.round(weightKg * .8);
-    setResults({ calories: Math.round(calorieTarget), protein, fat, carbs: Math.max(0, Math.round((calorieTarget - protein * 4 - fat * 9) / 4)) });
+    const proteinEaten = training.proteinEaten === "" ? 0 : training.proteinEaten;
+    setResults({ calories: Math.round(calorieTarget), protein, fat, carbs: Math.max(0, Math.round((calorieTarget - protein * 4 - fat * 9) / 4)), proteinRemaining: Math.max(0, protein - proteinEaten) });
   }
 
   function clearAll() { [PROFILE_KEY, TRAINING_KEY, INVENTORY_KEY, SELECTED_KEY].forEach((key) => localStorage.removeItem(key)); setProfile(defaultProfile); setTraining(defaultTraining); setInventory(defaultSupplements); setSelected([]); setResults(null); setTab("profile"); resetForm(); setNotice("Saved data cleared"); }
@@ -131,13 +132,18 @@ function App() {
         <label>Intensity<select value={training.intensity} onChange={(event) => updateTraining("intensity", event.target.value as Intensity)}><option value="easy">Easy</option><option value="moderate">Moderate</option><option value="hard">Hard</option></select></label>
         <label className="full-width">Sweat level<select value={training.sweat} onChange={(event) => updateTraining("sweat", event.target.value as Sweat)}><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
         <label className="full-width">Calories burned<input type="number" min="0" max="3000" value={training.caloriesBurned === "" ? estimatedBurn : training.caloriesBurned} onChange={(event) => setTraining((current) => ({ ...current, caloriesBurned: event.target.value === "" ? "" : Number(event.target.value) }))} /><small className="field-note">Suggested ballpark: {estimatedBurn} kcal, based on weight, workout, duration and intensity. <button type="button" onClick={() => setTraining((current) => ({ ...current, caloriesBurned: "" }))}>Use estimate</button></small></label>
+        <label className="full-width">Protein eaten so far<input type="number" min="0" max="500" value={training.proteinEaten} placeholder="e.g. 60" onChange={(event) => { setTraining((current) => ({ ...current, proteinEaten: event.target.value === "" ? "" : Number(event.target.value) })); setResults(null); }} /><small className="field-note">Optional. Enter grams eaten today so the app can estimate what remains.</small></label>
       </div></section><button className="calculate-button sticky-action" onClick={calculatePlan}>Calculate today&apos;s plan</button>
       {results && <section className="results" aria-live="polite"><div className="results-heading"><div><p className="eyebrow">TODAY&apos;S ESTIMATE</p><h2>{profile.name ? `${profile.name}'s plan` : "Your daily plan"}</h2></div><strong>{results.calories} kcal</strong></div><div className="macro-grid"><article><span>Protein</span><strong>{results.protein} g</strong></article><article><span>Carbohydrates</span><strong>{results.carbs} g</strong></article><article><span>Fat</span><strong>{results.fat} g</strong></article></div>
-        <div className="supplement-plan"><div className="section-heading compact"><span>02</span><div><h2>What matters today</h2><p>Only products in your inventory are shown.</p></div></div>{advice.length === 0 ? <div className="empty-state">No inventory items selected. Add or select products under Supplements.</div> : <div className="advice-list">{advice.map((item) => <article className={`advice-card ${item.status}`} key={item.id}><span className="status">{statusLabels[item.status]}</span><h3>{item.name}</h3><p>{item.reason}</p></article>)}</div>}<div className="safety-note"><strong>Safety check</strong><p>Supplements can interact with medicines and health conditions. Check with a clinician or pharmacist if pregnant, managing a condition, taking medication, or unsure about combined ingredients. Vitamin K can interact with warfarin.</p></div></div>
+        <div className="protein-options"><div className="protein-heading"><div><p className="eyebrow">PROTEIN GAP</p><h2>{results.proteinRemaining === 0 ? "Target covered" : `${results.proteinRemaining} g remaining`}</h2></div><p>{results.proteinRemaining === 0 ? "No additional protein is suggested from the information entered." : "Choose a mix across meals. These are approximate cooked-food equivalents, not amounts to eat all at once."}</p></div>
+          {results.proteinRemaining > 0 && <div className="food-grid"><article><span className="food-icon">🥤</span><strong>Whey shake</strong><b>{results.proteinRemaining <= 12 ? "½ serving" : "1 serving"}</b><small>About {Math.min(25, results.proteinRemaining)} g protein; check your label</small></article><article><span className="food-icon">🍗</span><strong>Chicken breast</strong><b>~{Math.ceil(results.proteinRemaining / 31 * 10) * 10} g</b><small>Cooked weight</small></article><article><span className="food-icon">🥩</span><strong>Lean pork</strong><b>~{Math.ceil(results.proteinRemaining / 27 * 10) * 10} g</b><small>Cooked weight</small></article><article><span className="food-icon">🥩</span><strong>Lean beef</strong><b>~{Math.ceil(results.proteinRemaining / 26 * 10) * 10} g</b><small>Cooked weight</small></article></div>}
+          <p className="food-source">Food values vary by cut and cooking method. Estimates use roughly 31 g protein/100 g chicken, 27 g/100 g lean pork and 26 g/100 g lean beef.</p>
+        </div>
+        <div className="supplement-plan"><div className="section-heading compact"><span>02</span><div><h2>What matters today</h2><p>Only products in your inventory are shown.</p></div></div>{advice.length === 0 ? <div className="empty-state">No inventory items selected. Add or select products under Supplements.</div> : <div className="advice-list">{advice.map((item) => <article className={`advice-card ${item.status}`} key={item.id}><span className="status">{statusLabels[item.status]}</span><h3>{item.name}</h3><b className="advice-amount">{item.amount}</b><p>{item.reason}</p></article>)}</div>}<div className="safety-note"><strong>Safety check</strong><p>Supplements can interact with medicines and health conditions. Check with a clinician or pharmacist if pregnant, managing a condition, taking medication, or unsure about combined ingredients. Vitamin K can interact with warfarin.</p></div></div>
       </section>}
     </> : <>
       {tab === "profile" && <><section className="panel"><div className="section-heading"><span>01</span><div><h2>Your profile</h2><p>Set this once; update it when your details change.</p></div></div><div className="form-grid"><label>Name<input value={profile.name} placeholder="Your name" onChange={(event) => updateProfile("name", event.target.value)} /></label><label>Age<input type="number" value={profile.age} placeholder="e.g. 30" min="18" max="100" onChange={(event) => numericProfile("age", event.target.value)} /></label><label>Sex<select value={profile.sex} onChange={(event) => updateProfile("sex", event.target.value as Profile["sex"])}><option value="female">Female</option><option value="male">Male</option></select></label><label>Height in cm<input type="number" value={profile.heightCm} placeholder="e.g. 165" min="120" max="230" onChange={(event) => numericProfile("heightCm", event.target.value)} /></label><label>Weight in kg<input type="number" value={profile.weightKg} placeholder="e.g. 50" min="35" max="250" step=".1" onChange={(event) => numericProfile("weightKg", event.target.value)} /></label><label>Goal<select value={profile.goal} onChange={(event) => updateProfile("goal", event.target.value as Goal)}><option value="fat-loss">Lose fat</option><option value="recomposition">Lose fat and build muscle</option><option value="maintain">Maintain</option><option value="muscle-gain">Build muscle</option></select></label></div></section><button className="continue-button" onClick={() => setTab("supplements")}>Continue to Supplements →</button></>}
-      {tab === "supplements" && <><section className="panel supplement-panel"><div className="section-heading inventory-heading"><span>02</span><div><h2>My supplement inventory</h2><p>Select what you have. Daily Fuel recommends only from these items.</p></div><button className="manage-button" onClick={() => { setManageInventory((value) => !value); resetForm(); }}>{manageInventory ? "Done" : "Manage"}</button></div><div className="supplement-list">{inventory.map((item) => <div className={`supplement-option ${selected.includes(item.id) ? "selected" : ""}`} key={item.id}><label className="supplement-choice"><input type="checkbox" checked={selected.includes(item.id)} onChange={() => toggleSupplement(item.id)} /><span className="checkmark" aria-hidden="true">{selected.includes(item.id) ? "✓" : ""}</span><span><strong>{item.name}</strong><small>{item.detail}</small></span></label>{manageInventory && <span className="inventory-actions">{item.custom && <button onClick={() => { setEditingId(item.id); setName(item.name); setDetail(item.detail); }}>Edit</button>}<button className="remove-supplement" onClick={() => removeSupplement(item)}>Remove</button></span>}</div>)}</div>
+      {tab === "supplements" && <><section className="panel supplement-panel"><div className="section-heading inventory-heading"><span>02</span><div><h2>My supplement inventory</h2><p>Select what you have. Daily Fuel recommends only from these items.</p></div><button className="manage-button" onClick={() => { setManageInventory((value) => !value); resetForm(); }}>{manageInventory ? "Done" : "+ Add / edit"}</button></div><div className="supplement-list">{inventory.map((item) => <div className={`supplement-option ${selected.includes(item.id) ? "selected" : ""}`} key={item.id}><label className="supplement-choice"><input type="checkbox" checked={selected.includes(item.id)} onChange={() => toggleSupplement(item.id)} /><span className="checkmark" aria-hidden="true">{selected.includes(item.id) ? "✓" : ""}</span><span><strong>{item.name}</strong><small>{item.detail}</small></span></label>{manageInventory && <span className="inventory-actions">{item.custom && <button onClick={() => { setEditingId(item.id); setName(item.name); setDetail(item.detail); }}>Edit</button>}<button className="remove-supplement" onClick={() => removeSupplement(item)}>Remove</button></span>}</div>)}</div>
         {inventory.length === 0 && <p className="empty-inventory">Your inventory is empty.</p>}<p className="selection-count">{selected.length} of {inventory.length} available products selected</p>{manageInventory && <><form className="add-supplement" onSubmit={saveSupplement}><h3>{editingId ? "Edit custom supplement" : "Add a supplement"}</h3><label>Name<input value={name} maxLength={80} placeholder="e.g. Collagen peptides" onChange={(event) => setName(event.target.value)} /></label><label>Serving or ingredients<input value={detail} maxLength={120} placeholder="Optional" onChange={(event) => setDetail(event.target.value)} /></label><div className="form-actions"><button className="save-supplement" disabled={!name.trim()}>{editingId ? "Save changes" : "Add to inventory"}</button>{editingId && <button className="cancel-edit" type="button" onClick={resetForm}>Cancel</button>}</div></form>{defaultSupplements.some((item) => !inventory.some((entry) => entry.id === item.id)) && <button className="restore-button" onClick={restoreDefaults}>Restore default supplements</button>}</>}
       </section><button className="continue-button" onClick={() => setTab("workout")}>Continue to Workout →</button></>}
     </>}
