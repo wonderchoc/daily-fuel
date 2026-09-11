@@ -36,11 +36,23 @@ const defaultTraining: Training = { workout: "strength", duration: 60, intensity
 const statusOrder: AdviceStatus[] = ["recommended", "conditional", "routine", "not-needed", "check"];
 const statusLabels: Record<AdviceStatus, string> = { recommended: "Recommended today", conditional: "Only if needed", routine: "Usual routine", "not-needed": "Not needed today", check: "Check first" };
 
-function safelyLoad<T>(key: string, fallback: T): T { try { const value = localStorage.getItem(key); return value ? JSON.parse(value) as T : fallback; } catch { return fallback; } }
+function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null; }
+function isOptionalNumber(value: unknown, min: number, max: number) { return value === "" || (typeof value === "number" && Number.isFinite(value) && value >= min && value <= max); }
+function isProfile(value: unknown): value is Profile {
+  if (!isRecord(value)) return false;
+  return typeof value.name === "string" && ["female", "male"].includes(String(value.sex)) && ["fat-loss", "recomposition", "maintain", "muscle-gain"].includes(String(value.goal)) && isOptionalNumber(value.age, 18, 100) && isOptionalNumber(value.heightCm, 120, 230) && isOptionalNumber(value.weightKg, 35, 250);
+}
+function isTraining(value: unknown): value is Training {
+  if (!isRecord(value)) return false;
+  return ["rest", "yoga", "strength", "cardio", "easy-run", "long-run", "double-session"].includes(String(value.workout)) && [30, 45, 60, 75, 90].includes(Number(value.duration)) && ["easy", "moderate", "hard"].includes(String(value.intensity)) && ["low", "medium", "high"].includes(String(value.sweat)) && isOptionalNumber(value.caloriesBurned, 0, 3000) && isOptionalNumber(value.proteinEaten, 0, 500);
+}
+function isInventory(value: unknown): value is Supplement[] { return Array.isArray(value) && value.length <= 100 && value.every((item) => isRecord(item) && typeof item.id === "string" && item.id.length <= 100 && typeof item.name === "string" && item.name.length <= 80 && typeof item.detail === "string" && item.detail.length <= 120 && (item.custom === undefined || typeof item.custom === "boolean")); }
+function isSelection(value: unknown): value is string[] { return Array.isArray(value) && value.length <= 100 && value.every((item) => typeof item === "string" && item.length <= 100); }
+function safelyLoad<T>(key: string, fallback: T, validate: (value: unknown) => value is T): T { try { const value: unknown = JSON.parse(localStorage.getItem(key) ?? "null"); return validate(value) ? value : fallback; } catch { return fallback; } }
 function isProfileComplete(profile: Profile) { return profile.age !== "" && profile.heightCm !== "" && profile.weightKg !== ""; }
 function estimateCaloriesBurned(profile: Profile, training: Training) {
   if (training.workout === "rest") return 0;
-  const weight = profile.weightKg === "" ? 60 : profile.weightKg;
+  const weight = typeof profile.weightKg === "number" && profile.weightKg >= 35 && profile.weightKg <= 250 ? profile.weightKg : 60;
   const mets: Record<Workout, number> = { rest: 1, yoga: 2.8, strength: 5, cardio: 7, "easy-run": 7, "long-run": 9, "double-session": 9 };
   const intensity: Record<Intensity, number> = { easy: .8, moderate: 1, hard: 1.2 };
   return Math.round(mets[training.workout] * intensity[training.intensity] * 3.5 * weight / 200 * training.duration);
@@ -66,11 +78,11 @@ function getAdvice(item: Supplement, training: Training, proteinRemaining: numbe
 }
 
 function App() {
-  const initialProfile = safelyLoad(PROFILE_KEY, defaultProfile);
+  const initialProfile = safelyLoad(PROFILE_KEY, defaultProfile, isProfile);
   const [profile, setProfile] = useState<Profile>(initialProfile);
-  const [training, setTraining] = useState<Training>(() => safelyLoad(TRAINING_KEY, defaultTraining));
-  const [inventory, setInventory] = useState<Supplement[]>(() => safelyLoad(INVENTORY_KEY, defaultSupplements));
-  const [selected, setSelected] = useState<string[]>(() => safelyLoad(SELECTED_KEY, []));
+  const [training, setTraining] = useState<Training>(() => safelyLoad(TRAINING_KEY, defaultTraining, isTraining));
+  const [inventory, setInventory] = useState<Supplement[]>(() => safelyLoad(INVENTORY_KEY, defaultSupplements, isInventory));
+  const [selected, setSelected] = useState<string[]>(() => safelyLoad(SELECTED_KEY, [], isSelection));
   const [tab, setTab] = useState<Tab>(() => isProfileComplete(initialProfile) ? "workout" : "profile");
   const [manageInventory, setManageInventory] = useState(false);
   const [name, setName] = useState("");
@@ -109,9 +121,12 @@ function App() {
     const { age, sex, heightCm, weightKg, goal } = profile;
     if (age === "" || heightCm === "" || weightKg === "") { setTab("profile"); setNotice("Complete your profile first"); return; }
     if (age < 18 || age > 100 || heightCm < 120 || heightCm > 230 || weightKg < 35 || weightKg > 250) { setTab("profile"); setNotice("Check your age, height and weight"); return; }
+    const caloriesBurned = training.caloriesBurned === "" ? estimatedBurn : training.caloriesBurned;
+    if (!Number.isFinite(caloriesBurned) || caloriesBurned < 0 || caloriesBurned > 3000) { setNotice("Calories burned must be between 0 and 3,000"); return; }
+    if (training.proteinEaten !== "" && (!Number.isFinite(training.proteinEaten) || training.proteinEaten < 0 || training.proteinEaten > 500)) { setNotice("Protein eaten must be between 0 and 500 g"); return; }
     const bmr = 10 * weightKg + 6.25 * heightCm - 5 * age + (sex === "male" ? 5 : -161);
     const goalFactor: Record<Goal, number> = { "fat-loss": .88, recomposition: .95, maintain: 1, "muscle-gain": 1.08 };
-    const calorieTarget = bmr * 1.4 * goalFactor[goal] + (training.caloriesBurned === "" ? estimatedBurn : training.caloriesBurned);
+    const calorieTarget = bmr * 1.4 * goalFactor[goal] + caloriesBurned;
     const proteinFactor: Record<Goal, number> = { "fat-loss": 2, recomposition: 1.9, maintain: 1.6, "muscle-gain": 1.8 };
     const protein = Math.round(weightKg * proteinFactor[goal]); const fat = Math.round(weightKg * .8);
     const proteinEaten = training.proteinEaten === "" ? 0 : training.proteinEaten;
