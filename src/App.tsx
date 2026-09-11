@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import type { FormEvent } from "react";
 import "./App.css";
 
 type Goal = "fat-loss" | "recomposition" | "maintain" | "muscle-gain";
@@ -19,6 +20,7 @@ interface Supplement {
   id: string;
   name: string;
   detail: string;
+  custom?: boolean;
 }
 
 interface SupplementAdvice extends Supplement {
@@ -28,6 +30,7 @@ interface SupplementAdvice extends Supplement {
 
 const PROFILE_KEY = "dailyFuelProfileV2";
 const SUPPLEMENT_KEY = "dailyFuelSupplementsV2";
+const INVENTORY_KEY = "dailyFuelInventoryV2";
 
 const supplements: Supplement[] = [
   { id: "whey", name: "Whey Protein", detail: "Protein top-up" },
@@ -85,15 +88,20 @@ function getSupplementAdvice(item: Supplement, workout: Workout): SupplementAdvi
 
 function App() {
   const [profile, setProfile] = useState<Profile>(() => safelyLoad(PROFILE_KEY, defaultProfile));
+  const [inventory, setInventory] = useState<Supplement[]>(() => safelyLoad(INVENTORY_KEY, supplements));
   const [selected, setSelected] = useState<string[]>(() => safelyLoad(SUPPLEMENT_KEY, []));
+  const [supplementName, setSupplementName] = useState("");
+  const [supplementDetail, setSupplementDetail] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [results, setResults] = useState<{ calories: number; protein: number; carbs: number; fat: number } | null>(null);
 
   useEffect(() => localStorage.setItem(PROFILE_KEY, JSON.stringify(profile)), [profile]);
   useEffect(() => localStorage.setItem(SUPPLEMENT_KEY, JSON.stringify(selected)), [selected]);
+  useEffect(() => localStorage.setItem(INVENTORY_KEY, JSON.stringify(inventory)), [inventory]);
 
   const advice = useMemo(
-    () => supplements.filter((item) => selected.includes(item.id)).map((item) => getSupplementAdvice(item, profile.workout)),
-    [selected, profile.workout],
+    () => inventory.filter((item) => selected.includes(item.id)).map((item) => getSupplementAdvice(item, profile.workout)),
+    [inventory, selected, profile.workout],
   );
 
   function updateProfile<K extends keyof Profile>(field: K, value: Profile[K]) {
@@ -102,6 +110,45 @@ function App() {
 
   function toggleSupplement(id: string) {
     setSelected((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
+  }
+
+  function resetSupplementForm() {
+    setSupplementName("");
+    setSupplementDetail("");
+    setEditingId(null);
+  }
+
+  function saveSupplement(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const name = supplementName.trim();
+    const detail = supplementDetail.trim() || "Custom supplement";
+    if (!name) return;
+
+    if (editingId) {
+      setInventory((current) => current.map((item) => item.id === editingId ? { ...item, name, detail } : item));
+    } else {
+      setInventory((current) => [...current, { id: `custom-${Date.now()}`, name, detail, custom: true }]);
+    }
+    resetSupplementForm();
+  }
+
+  function editSupplement(item: Supplement) {
+    setEditingId(item.id);
+    setSupplementName(item.name);
+    setSupplementDetail(item.detail);
+  }
+
+  function removeSupplement(id: string) {
+    setInventory((current) => current.filter((item) => item.id !== id));
+    setSelected((current) => current.filter((item) => item !== id));
+    if (editingId === id) resetSupplementForm();
+  }
+
+  function restoreDefaults() {
+    setInventory((current) => {
+      const existing = new Set(current.map((item) => item.id));
+      return [...current, ...supplements.filter((item) => !existing.has(item.id))];
+    });
   }
 
   function calculatePlan() {
@@ -128,8 +175,11 @@ function App() {
   function clearProfile() {
     localStorage.removeItem(PROFILE_KEY);
     localStorage.removeItem(SUPPLEMENT_KEY);
+    localStorage.removeItem(INVENTORY_KEY);
     setProfile(defaultProfile);
+    setInventory(supplements);
     setSelected([]);
+    resetSupplementForm();
     setResults(null);
   }
 
@@ -160,15 +210,32 @@ function App() {
         <section className="panel supplement-panel">
           <div className="section-heading"><span>02</span><div><h2>Your supplements</h2><p>Select only products you currently have.</p></div></div>
           <div className="supplement-list">
-            {supplements.map((item) => (
-              <label className={`supplement-option ${selected.includes(item.id) ? "selected" : ""}`} key={item.id}>
-                <input type="checkbox" checked={selected.includes(item.id)} onChange={() => toggleSupplement(item.id)} />
-                <span className="checkmark" aria-hidden="true">{selected.includes(item.id) ? "✓" : ""}</span>
-                <span><strong>{item.name}</strong><small>{item.detail}</small></span>
-              </label>
+            {inventory.map((item) => (
+              <div className={`supplement-option ${selected.includes(item.id) ? "selected" : ""}`} key={item.id}>
+                <label className="supplement-choice">
+                  <input type="checkbox" checked={selected.includes(item.id)} onChange={() => toggleSupplement(item.id)} />
+                  <span className="checkmark" aria-hidden="true">{selected.includes(item.id) ? "✓" : ""}</span>
+                  <span><strong>{item.name}</strong><small>{item.detail}</small></span>
+                </label>
+                <span className="inventory-actions">
+                  {item.custom && <button type="button" onClick={() => editSupplement(item)} aria-label={`Edit ${item.name}`}>Edit</button>}
+                  <button className="remove-supplement" type="button" onClick={() => removeSupplement(item.id)} aria-label={`Remove ${item.name}`}>Remove</button>
+                </span>
+              </div>
             ))}
           </div>
-          <p className="selection-count">{selected.length} of {supplements.length} selected</p>
+          {inventory.length === 0 && <p className="empty-inventory">Your inventory is empty. Add a supplement below or restore the defaults.</p>}
+          <p className="selection-count">{selected.length} of {inventory.length} selected</p>
+          <form className="add-supplement" onSubmit={saveSupplement}>
+            <h3>{editingId ? "Edit custom supplement" : "Add a supplement"}</h3>
+            <label>Name<input value={supplementName} maxLength={80} placeholder="e.g. Collagen peptides" onChange={(event) => setSupplementName(event.target.value)} /></label>
+            <label>Serving or note <input value={supplementDetail} maxLength={100} placeholder="Optional" onChange={(event) => setSupplementDetail(event.target.value)} /></label>
+            <div className="form-actions">
+              <button className="save-supplement" type="submit" disabled={!supplementName.trim()}>{editingId ? "Save changes" : "Add to inventory"}</button>
+              {editingId && <button className="cancel-edit" type="button" onClick={resetSupplementForm}>Cancel</button>}
+            </div>
+          </form>
+          {supplements.some((item) => !inventory.some((entry) => entry.id === item.id)) && <button className="restore-button" type="button" onClick={restoreDefaults}>Restore default supplements</button>}
         </section>
 
         <button className="calculate-button" onClick={calculatePlan}>Calculate today&apos;s plan</button>
